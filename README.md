@@ -47,3 +47,17 @@ It is a simple personal logbook to record:
 - what problems I found
 - how I fixed them
 - what evidence I captured
+
+## Naming Standard
+
+This lab uses the following naming format:
+
+BAA-[SITE]-[ROLE][NUMBER]
+
+Example:
+
+BAA-BIG-DC1
+
+The full naming standard is recorded in:
+
+naming-standard.md
