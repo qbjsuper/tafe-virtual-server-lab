@@ -316,3 +316,23 @@ Do not describe the lab as a completed Storage Replica cluster yet.
 The accurate status is:
 
 The stretched cluster foundation is complete, and the environment is prepared for Storage Replica. The Storage Replica partnership is the next major build step.
+
+# Checkpoint — Storage Replica Investigation Result
+
+The two-node multi-subnet failover cluster `BAA-CLUSTER1` was successfully built with nodes `BAA-BIG-HA1` and `BAA-SML-HA1`. The cluster uses a File Share Witness hosted at `\\BAA-BIG-DC1\ClusterWitness`.
+
+Local ReFS volumes were prepared on both nodes:
+- D: Data, approximately 40 GB
+- L: Log, approximately 10 GB
+
+The real Windows file-system view was verified with `Win32_LogicalDisk` and `Get-PSDrive`. Each node showed only one usable D: and one usable L: volume, and write tests to both volumes succeeded.
+
+Cluster disk resource checks showed that no disk resources were currently added to the cluster. `Get-ClusterAvailableDisk -All` returned no available disks.
+
+A Storage Replica topology test was attempted from `BAA-BIG-HA1` to `BAA-SML-HA1`. The test failed because both servers are members of `BAA-CLUSTER1`, and the D: data volume is not a clustered disk.
+
+Conclusion:
+The cluster foundation is working, and the local D:/L: disk layout is clean. However, Storage Replica does not support replicating non-clustered local disks on nodes that are already part of a failover cluster. The planned asymmetric local-disk stretched cluster design is therefore not supported in this form.
+
+Next decision:
+Keep `BAA-CLUSTER1` as the failover cluster proof, and either build a separate server-to-server Storage Replica proof-of-concept or redesign the cluster storage layer using a supported clustered-storage architecture.
