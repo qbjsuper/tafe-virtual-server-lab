@@ -169,3 +169,150 @@ The next actions are:
 - map 172.16.50.0/24 to BAA-SML-SITE
 - configure DHCP on BAA-SML-DC1
 - verify client DHCP and domain join
+
+# Checkpoint — BAA-CLUSTER1 Stretched Cluster and Storage Replica Preparation
+
+Date: 2026-05-19
+
+## Objective
+
+Build a two-node stretched Windows Failover Cluster across two routed subnets in the bojieanzac.com lab, using File Share Witness for quorum and preparing local D: and L: volumes for a future Storage Replica partnership.
+
+## Cluster identity
+
+- Cluster name: BAA-CLUSTER1
+- Domain: bojieanzac.com
+- Node 1: BAA-BIG-HA1
+- Node 2: BAA-SML-HA1
+- BIG subnet: 172.16.60.0/24
+- SMALL subnet: 172.16.50.0/24
+- BIG cluster IP: 172.16.60.110
+- SMALL cluster IP: 172.16.50.110
+- Witness: \\BAA-BIG-DC1\ClusterWitness
+
+## Storage preparation completed
+
+Each cluster node was prepared with local storage:
+
+- D: volume for data
+- L: volume for log
+- File system: ReFS
+
+During disk preparation, Windows had assigned or reserved the D: drive letter incorrectly. The DVD drive was moved to Z:, and a leftover ghost partition using D: was removed. After that, Disk 1 was initialized and formatted as D:, and Disk 2 was initialized and formatted as L:.
+
+## Network validation completed
+
+Before creating the cluster, inter-site connectivity was tested across the pfSense IPsec tunnel.
+
+Validated items:
+
+- ICMP between nodes
+- DNS name resolution
+- TCP 445 / SMB between nodes
+- Access to BAA-BIG-DC1 over TCP 445
+
+This confirmed that the routed/IPsec path was good enough for cluster creation.
+
+## Cluster validation completed
+
+Cluster validation was run against:
+
+- BAA-BIG-HA1
+- BAA-SML-HA1
+
+Selected validation categories:
+
+- Network
+- System Configuration
+- Inventory
+
+Storage validation was intentionally not used as a traditional shared-storage test because the design target is Storage Replica, not shared SAN/iSCSI storage.
+
+Result:
+
+- Validation completed with warnings
+- No major blocking failure identified
+- Warnings were expected because the design is multi-subnet and currently has only one main network path
+
+## Cluster creation completed
+
+The cluster was created with:
+
+- Cluster name: BAA-CLUSTER1
+- Nodes: BAA-BIG-HA1 and BAA-SML-HA1
+- Static addresses: 172.16.60.110 and 172.16.50.110
+- No automatic storage ingestion
+
+The use of -NoStorage was intentional because this is not a traditional shared-disk cluster.
+
+## Quorum configured
+
+A File Share Witness was created on BAA-BIG-DC1:
+
+- Path: C:\ClusterWitness
+- Share path: \\BAA-BIG-DC1\ClusterWitness
+- Cluster object: BAA-CLUSTER1$
+
+The cluster quorum was configured as Node and File Share Majority.
+
+This provides a third vote for the two-node cluster and reduces split-brain risk.
+
+## Site topology configured
+
+Cluster fault domains were created:
+
+- BAA-BIG-SITE
+- BAA-SML-SITE
+
+Nodes were assigned to their corresponding sites:
+
+- BAA-BIG-HA1 → BAA-BIG-SITE
+- BAA-SML-HA1 → BAA-SML-SITE
+
+This gives the cluster site awareness for the stretched design.
+
+## Current storage interpretation
+
+Local disks may have been added to the cluster inventory using:
+
+Get-ClusterAvailableDisk -All | Add-ClusterDisk
+
+However, this does not complete Storage Replica.
+
+Current storage state:
+
+- Local D: and L: volumes exist on both nodes
+- Traditional shared storage is not the design goal
+- Storage Replica partnership still needs to be created and validated
+
+## Current project state
+
+Completed:
+
+- Domain membership
+- Inter-site network connectivity
+- pfSense/IPsec path validation
+- Failover cluster feature installation
+- Storage Replica feature installation
+- Cluster validation
+- Multi-subnet cluster creation
+- File Share Witness quorum
+- Fault-domain/site awareness
+- Local D: and L: volume preparation
+
+Not completed yet:
+
+- Storage Replica topology test
+- Storage Replica partnership creation
+- Replication health validation
+- Planned failover test
+- Unplanned failover behaviour test
+- Final documentation of active/passive storage ownership
+
+## Key caution
+
+Do not describe the lab as a completed Storage Replica cluster yet.
+
+The accurate status is:
+
+The stretched cluster foundation is complete, and the environment is prepared for Storage Replica. The Storage Replica partnership is the next major build step.
