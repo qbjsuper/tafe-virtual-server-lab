@@ -119,4 +119,96 @@ The VPN allows:
 - DNS should point to the domain controllers, not to pfSense or external DNS.
 - pfSense is used as the gateway and firewall, not as the main DNS server for Active Directory clients.
 - Static IP addresses are used for infrastructure servers.
-- DHCP is used for normal client machines.
+- DHCP is used for normal client machines.[2026-05-21 19:20 AEST]
+
+Corrected sentence:
+
+**Here is an IP address assignment update.**
+
+## IP Address Assignment Update — Current Lab
+
+### BIG site — `172.16.60.0/24`
+
+| Device         |                        Role |           IP address | Notes                                         |
+| -------------- | --------------------------: | -------------------: | --------------------------------------------- |
+| `BAA-BIG-PFS1` |             pfSense gateway |        `172.16.60.1` | BIG site default gateway                      |
+| `BAA-BIG-DC1`  |          AD DS / DNS / DHCP |       `172.16.60.10` | Primary BIG site DC                           |
+| `BAA-BIG-HA1`  |        Hyper-V cluster node |       `172.16.60.21` | Static IP, cluster node                       |
+| `BAA-CLUSTER1` | Cluster core IP, BIG subnet |      `172.16.60.110` | Online when cluster group is on `BAA-BIG-HA1` |
+| `BAA-BIG-LX1`  |         Linux domain member | DHCP / current lease | Hostname fixed and domain SSH working         |
+| `BAA-BIG-LX2`  |               Linux test VM | DHCP / current lease | Imported VM working                           |
+| `BAA-BIG-WS`   |         Windows workstation | DHCP / current lease | Imported VM working                           |
+
+Recommended DNS for `BAA-BIG-DC1`:
+
+```text
+Preferred DNS: 127.0.0.1
+Alternate DNS: 172.16.50.10
+```
+
+Recommended DNS for `BAA-BIG-HA1`:
+
+```text
+Preferred DNS: 172.16.60.10
+Alternate DNS: 172.16.50.10
+```
+
+---
+
+### SML site — `172.16.50.0/24`
+
+| Device         |                        Role |      IP address | Notes                                         |
+| -------------- | --------------------------: | --------------: | --------------------------------------------- |
+| `BAA-SML-PFS1` |             pfSense gateway |   `172.16.50.1` | SML site default gateway                      |
+| `BAA-SML-DC1`  |          AD DS / DNS / DHCP |  `172.16.50.10` | Primary SML site DC                           |
+| `BAA-SML-HA1`  |        Hyper-V cluster node |  `172.16.50.21` | Static IP, cluster node                       |
+| `BAA-CLUSTER1` | Cluster core IP, SML subnet | `172.16.50.110` | Online when cluster group is on `BAA-SML-HA1` |
+
+Recommended DNS for `BAA-SML-DC1`:
+
+```text
+Preferred DNS: 127.0.0.1
+Alternate DNS: 172.16.60.10
+```
+
+Recommended DNS for `BAA-SML-HA1`:
+
+```text
+Preferred DNS: 172.16.50.10
+Alternate DNS: 172.16.60.10
+```
+
+---
+
+## Cluster IP Behaviour
+
+Current confirmed cluster behaviour:
+
+```text
+Cluster group on BAA-SML-HA1:
+172.16.50.110 Online
+172.16.60.110 Offline
+
+Cluster group on BAA-BIG-HA1:
+172.16.60.110 Online
+172.16.50.110 Offline
+```
+
+This is correct for a multi-subnet cluster because the `Cluster Name` dependency is:
+
+```text
+[Cluster IP Address] or [Cluster IP Address 172.16.50.110]
+```
+
+Only one cluster IP needs to be online at a time.
+
+## Status
+
+```text
+AD replication: healthy, 0 failures
+BIG ↔ SML IPsec: working
+Cluster nodes: BAA-BIG-HA1 and BAA-SML-HA1 both Up
+Cluster group move test: passed
+Cluster core IP failover: passed
+Next stage: shared storage / iSCSI / CSV
+```
