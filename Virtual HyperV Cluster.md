@@ -708,9 +708,630 @@ Live migration:            Next major test
 Domain join for Ubuntu:    Later milestone
 ```
 
+---
+
 ## 18.About BAA-TEST-VM01 
 Nested VM had no IPv4 address because Netplan did not enable DHCPv4. Created a new Netplan YAML file with dhcp4: true for the active interface, applied it with netplan apply, and IPv4 networking started working.
+
+
+---
 
 ## 19.Live Migration worked
 Live migration succeeded from BAA-BIG-Nest1 to BAA-SML-Nest1.
 The VM stayed online, but guest network reachability failed after migration because the destination node does not present the same 172.16.60.0/24 guest network.
+
+---
+
+[2026-05-26 13:55 AEST]
+
+Corrected sentence: **A full log of what we did today.**
+
+## Full Log — Nested Hyper-V Cluster Live Migration and Guest Network Testing
+
+### 1. Starting point
+
+We resumed from the working nested Hyper-V cluster checkpoint.
+
+Current lab components:
+
+```text
+Cluster nodes:
+- BAA-BIG-Nest1
+- BAA-SML-Nest1
+
+Storage server:
+- BAA-STOR1
+- IP: 172.16.50.101
+- Domain joined to bojieanzac.com
+
+Shared storage:
+- iSCSI virtual disk from BAA-STOR1
+- Cluster Disk 1
+- Mounted as Cluster Shared Volume:
+  C:\ClusterStorage\Volume1
+
+Test VM:
+- BAA-TEST-VM01
+- Ubuntu 26.04
+- Also called Ubibi
+```
+
+This follows the earlier design direction: using nested Windows Server Hyper-V hosts, shared iSCSI storage, Cluster Shared Volume, and a small test VM for live migration demonstration. 
+
+---
+
+## 2. Ubibi / BAA-TEST-VM01 had no IPv4 address
+
+The first issue today was that the Ubuntu test VM had no IPv4 address.
+
+We confirmed:
+
+```text
+BAA-BIG-Nest1 had internet access.
+BAA-TEST-VM01 / Ubibi did not have an IPv4 address.
+```
+
+That narrowed the problem. Since the nested Hyper-V host had internet, the likely causes were:
+
+```text
+- Wrong VM switch
+- MAC spoofing issue
+- DHCP not reaching the VM
+- Ubuntu Netplan not requesting IPv4 DHCP
+```
+
+Inside Ubuntu, `dhclient` was not available, which is normal on newer Ubuntu versions.
+
+We checked Netplan using:
+
+```bash
+sudo cat /etc/netplan/*.yaml
+```
+
+This displayed the Netplan configuration with root permission. It was required because normal `cat` received a permission denied error.
+
+Finding:
+
+```text
+The Netplan file did not include dhcp4: true.
+```
+
+Fix:
+
+```text
+Created a new Netplan YAML file with dhcp4: true for the active interface.
+```
+
+Result:
+
+```text
+BAA-TEST-VM01 received an IPv4 address successfully.
+```
+
+Conclusion:
+
+```text
+Root cause:
+Ubuntu 26.04 was not configured to request DHCPv4.
+
+Fix:
+Created a new Netplan YAML file enabling dhcp4: true.
+```
+
+---
+
+## 3. Cluster Group was failed, then fixed
+
+Before live migration, we checked the cluster groups.
+
+Initial result:
+
+```text
+Available Storage    Offline
+BAA-TEST-VM01        Online
+Cluster Group        Failed
+```
+
+Important interpretation:
+
+```text
+BAA-TEST-VM01 was online.
+The failed item was the cluster core group, not the VM role.
+```
+
+We checked the cluster core resources and brought the Cluster Group back online.
+
+After fixing it, the cluster group showed:
+
+```text
+Cluster Group        Online
+Cluster Name         Online
+Cluster IP Address   Online
+Cluster IP Address 172.16.50.120   Offline
+```
+
+We confirmed the dependency:
+
+```text
+Cluster Name depends on:
+[Cluster IP Address] OR [Cluster IP Address 172.16.50.120]
+```
+
+This means only one of the cluster IP resources needs to be online at a time, which is acceptable for this multi-subnet cluster design.
+
+Conclusion:
+
+```text
+Cluster core group became healthy again.
+Offline secondary IP was acceptable because the dependency uses OR logic.
+```
+
+---
+
+## 4. First live migration test succeeded
+
+We confirmed:
+
+```text
+BAA-TEST-VM01 was online.
+Cluster Group was online.
+Both cluster nodes were available.
+```
+
+Then we ran live migration:
+
+```powershell
+Move-ClusterVirtualMachineRole -Name "BAA-TEST-VM01" -Node "BAA-SML-Nest1" -MigrationType Live
+```
+
+This command live-migrated the clustered VM role to `BAA-SML-Nest1`. It was required to test whether the nested Hyper-V cluster could move a running VM between nodes without shutting it down.
+
+Result:
+
+```text
+BAA-TEST-VM01 moved to BAA-SML-Nest1.
+State remained Online.
+```
+
+The Ubuntu VM console blinked briefly during migration. We treated that as normal because VM console sessions can briefly refresh during live migration cutover.
+
+Then we moved it back:
+
+```powershell
+Move-ClusterVirtualMachineRole -Name "BAA-TEST-VM01" -Node "BAA-BIG-Nest1" -MigrationType Live
+```
+
+Result:
+
+```text
+BAA-TEST-VM01 moved back to BAA-BIG-Nest1.
+State remained Online.
+```
+
+Confirmed result:
+
+```text
+Two-way live migration worked:
+BAA-BIG-Nest1 → BAA-SML-Nest1
+BAA-SML-Nest1 → BAA-BIG-Nest1
+```
+
+---
+
+## 5. We discovered the guest network portability problem
+
+The test VM had:
+
+```text
+IP address:       172.16.60.102
+Default gateway:  172.16.60.1
+```
+
+This worked while the VM was on `BAA-BIG-Nest1`.
+
+But after migrating to `BAA-SML-Nest1`, Ubuntu still kept:
+
+```text
+IP address:       172.16.60.102
+Default gateway:  172.16.60.1
+```
+
+The SML node is in the `172.16.50.0/24` network. Therefore, after migration, the VM was still logically configured for the BIG network while running on the SML-side host.
+
+We observed unreachable replies such as:
+
+```text
+Reply from 172.16.60.100: Destination host unreachable
+```
+
+Conclusion:
+
+```text
+Live migration succeeded.
+Guest network continuity failed.
+```
+
+Reason:
+
+```text
+BAA-SML-Nest1 does not present the same 172.16.60.0/24 guest network to the VM.
+```
+
+Key design lesson:
+
+```text
+Live migration moves compute state.
+It does not automatically change the guest OS IP address, gateway, or DNS.
+```
+
+---
+
+## 6. Production design discussion
+
+We discussed whether production VMs should change IP after migration.
+
+Conclusion:
+
+```text
+For production VMs, changing IP after migration is usually not ideal.
+```
+
+Practical production designs include:
+
+```text
+1. Present the same guest VLAN/subnet on every cluster host.
+2. Use stretched/overlay networking if same-IP mobility is required across sites.
+3. Use separate site clusters and replication for disaster recovery.
+4. Use DNS/load balancer/application-level HA for service continuity.
+```
+
+For a disaster scenario where the main site is destroyed, we clarified:
+
+```text
+That is not live migration.
+That is disaster recovery / site failover.
+```
+
+Better model:
+
+```text
+Primary site runs production workloads.
+DR site receives replicated data/workloads.
+If primary site fails, the DR site starts services and clients are redirected by DNS, routing, load balancer, or application-level failover.
+```
+
+For seamless client service, we identified the better production pattern:
+
+```text
+Multiple service instances across sites
++ load balancer or traffic manager
++ replicated data layer
++ health checks
++ failover runbook
+```
+
+---
+
+## 7. We tested manual IP refresh after migration
+
+We decided to make the VM use the SML subnet after migration.
+
+Expected SML-side network:
+
+```text
+IP network: 172.16.50.0/24
+Gateway:    172.16.50.1
+```
+
+Inside Ubuntu, we tested DHCP refresh methods.
+
+This did **not** work:
+
+```bash
+sudo networkctl renew eth0
+```
+
+This command tried to renew the DHCP lease only. It did not force Ubuntu to fully drop and rebuild the network configuration.
+
+This **did** work:
+
+```bash
+sudo networkctl reconfigure eth0
+```
+
+This command reconfigured the `eth0` interface through `systemd-networkd`. It was stronger than `renew` and forced Ubuntu to request a new network configuration from the currently connected site network.
+
+Confirmed behaviour:
+
+```text
+After moving to SML:
+- VM still had 172.16.60.x
+- networkctl reconfigure eth0 changed it to 172.16.50.x
+
+After moving back to BIG:
+- VM still had 172.16.50.x
+- networkctl reconfigure eth0 changed it to 172.16.60.x
+```
+
+Conclusion:
+
+```text
+networkctl reconfigure eth0 is the working command for refreshing the VM IP after migration.
+```
+
+---
+
+## 8. CSV / iSCSI health check after a temporary storage event
+
+At one point, the cluster event log showed storage-related events around `Cluster Disk 1`.
+
+The log included messages such as:
+
+```text
+Cluster Disk 1
+ProcessingFailure
+CannotComeOnlineOnThisNode
+StorageFailure
+exceeded its failover threshold
+```
+
+The same log also showed that the VM role moved and the cluster later recovered. The output showed `AutoFailbackType : 0` and no preferred owners, meaning the movement was not caused by a normal preferred-owner failback policy. 
+
+We then verified the storage state.
+
+Command:
+
+```powershell
+Get-ClusterSharedVolume | Format-List *
+```
+
+Result:
+
+```text
+Name: Cluster Disk 1
+OwnerNode: BAA-SML-Nest1
+SharedVolumeInfo: C:\ClusterStorage\Volume1
+State: Online
+```
+
+Command:
+
+```powershell
+Get-ClusterSharedVolume | Select-Object -ExpandProperty SharedVolumeInfo
+```
+
+Result:
+
+```text
+FaultState: NoFaults
+FriendlyVolumeName: C:\ClusterStorage\Volume1
+MaintenanceMode: False
+RedirectedAccess: False
+```
+
+Command:
+
+```powershell
+Invoke-Command -ComputerName BAA-BIG-Nest1,BAA-SML-Nest1 -ScriptBlock {
+    Test-Path C:\ClusterStorage\Volume1
+}
+```
+
+Result:
+
+```text
+True
+True
+```
+
+Command:
+
+```powershell
+Invoke-Command -ComputerName BAA-BIG-Nest1,BAA-SML-Nest1 -ScriptBlock {
+    Get-IscsiSession
+}
+```
+
+Result:
+
+```text
+BAA-BIG-Nest1:
+- IsConnected: True
+- IsPersistent: True
+
+BAA-SML-Nest1:
+- IsConnected: True
+- IsPersistent: True
+```
+
+Command:
+
+```powershell
+Invoke-Command -ComputerName BAA-BIG-Nest1,BAA-SML-Nest1 -ScriptBlock {
+    Get-Disk | Select-Object Number, FriendlyName, OperationalStatus, HealthStatus, IsOffline, PartitionStyle
+}
+```
+
+Result:
+
+```text
+Both nodes showed disks Online and Healthy.
+```
+
+Conclusion:
+
+```text
+CSV and iSCSI storage are currently healthy.
+The earlier event was likely a temporary CSV ownership / failover event during movement, not a permanent storage failure.
+```
+
+---
+
+## 9. We automated the guest network refresh
+
+Since manual `networkctl reconfigure eth0` worked, we automated it with a systemd timer inside Ubuntu.
+
+Confirmed interface name:
+
+```text
+eth0
+```
+
+Script created:
+
+```bash
+sudo nano /usr/local/sbin/reconfigure-network-after-migration.sh
+```
+
+Content:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+IFACE="eth0"
+
+networkctl reconfigure "$IFACE"
+```
+
+This script runs the working network reconfiguration command for `eth0`.
+
+Made executable:
+
+```bash
+sudo chmod +x /usr/local/sbin/reconfigure-network-after-migration.sh
+```
+
+This gave the script execute permission so systemd can run it.
+
+Systemd service created:
+
+```bash
+sudo nano /etc/systemd/system/reconfigure-network-after-migration.service
+```
+
+Content:
+
+```ini
+[Unit]
+Description=Reconfigure network after Hyper-V migration
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/reconfigure-network-after-migration.sh
+```
+
+Systemd timer created:
+
+```bash
+sudo nano /etc/systemd/system/reconfigure-network-after-migration.timer
+```
+
+Content:
+
+```ini
+[Unit]
+Description=Run network reconfiguration every 30 seconds
+
+[Timer]
+OnBootSec=30
+OnUnitActiveSec=30
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target
+```
+
+Enabled and started:
+
+```bash
+sudo systemctl daemon-reload
+```
+
+This reloaded systemd so it could see the new service and timer units.
+
+```bash
+sudo systemctl enable --now reconfigure-network-after-migration.timer
+```
+
+This enabled the timer at boot and started it immediately.
+
+---
+
+## 10. Final validation
+
+We moved the VM again while the automation was enabled.
+
+When the VM was on SML:
+
+```text
+eth0 automatically reconfigured.
+The VM received a 172.16.50.x address.
+The default gateway changed to 172.16.50.1.
+```
+
+Then we moved it back to BIG:
+
+```powershell
+Move-ClusterVirtualMachineRole -Name "BAA-TEST-VM01" -Node "BAA-BIG-Nest1" -MigrationType Live
+```
+
+After waiting for the timer:
+
+```text
+eth0 automatically reconfigured.
+The VM received a 172.16.60.x address.
+The default gateway changed to 172.16.60.1.
+```
+
+Final result:
+
+```text
+Working.
+```
+
+---
+
+# Final Checkpoint
+
+```text
+Date: 2026-05-26
+
+Nested Hyper-V cluster live migration test is successful.
+
+BAA-TEST-VM01 / Ubibi can live migrate between:
+- BAA-BIG-Nest1
+- BAA-SML-Nest1
+
+Shared iSCSI CSV storage is working:
+- Cluster Disk 1
+- C:\ClusterStorage\Volume1
+- CSV online
+- FaultState: NoFaults
+- iSCSI connected on both nodes
+
+Guest network finding:
+- BIG node presents 172.16.60.0/24
+- SML node presents 172.16.50.0/24
+- Ubuntu keeps its previous DHCP lease after live migration
+- Running networkctl reconfigure eth0 forces the VM to obtain the correct site IP
+
+Automation added:
+- systemd service:
+  reconfigure-network-after-migration.service
+- systemd timer:
+  reconfigure-network-after-migration.timer
+- runs every 30 seconds
+- automatically executes:
+  networkctl reconfigure eth0
+
+Final behaviour:
+- On BIG: VM gets 172.16.60.x with gateway 172.16.60.1
+- On SML: VM gets 172.16.50.x with gateway 172.16.50.1
+```
+
+Clean report statement:
+
+```text
+The clustered Ubuntu VM successfully live migrated between the two nested Hyper-V cluster nodes. Because the two nodes present different guest networks, the VM initially retained its previous DHCP lease after migration. A guest-level systemd timer was implemented to run networkctl reconfigure eth0 every 30 seconds, allowing the VM to automatically obtain the correct site subnet after migration. This demonstrates live migration plus post-migration guest network adaptation, while also highlighting that production-grade seamless service continuity would normally require shared guest networks, DNS/load balancing, or application-level high availability.
+```
