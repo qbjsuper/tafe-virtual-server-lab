@@ -708,3 +708,5 @@ Live migration:            Next major test
 Domain join for Ubuntu:    Later milestone
 ```
 
+## 18.About BAA-TEST-VM01 
+Nested VM had no IPv4 address because Netplan did not enable DHCPv4. Created a new Netplan YAML file with dhcp4: true for the active interface, applied it with netplan apply, and IPv4 networking started working.
