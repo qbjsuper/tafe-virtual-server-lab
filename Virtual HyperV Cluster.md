@@ -710,3 +710,7 @@ Domain join for Ubuntu:    Later milestone
 
 ## 18.About BAA-TEST-VM01 
 Nested VM had no IPv4 address because Netplan did not enable DHCPv4. Created a new Netplan YAML file with dhcp4: true for the active interface, applied it with netplan apply, and IPv4 networking started working.
+
+## 19.Live Migration worked
+Live migration succeeded from BAA-BIG-Nest1 to BAA-SML-Nest1.
+The VM stayed online, but guest network reachability failed after migration because the destination node does not present the same 172.16.60.0/24 guest network.
