@@ -1,0 +1,535 @@
+NethServer Build Log — BAA-SML-NETH1
+Date: 2026-05-27  
+Project: BAA / TAFE Virtual Server Lab  
+Server: BAA-SML-NETH1  
+Site: SML  
+Purpose: Deploy NethServer 8 on Rocky Linux 9 as a Linux application platform.
+---
+1. Design Decision
+We decided to deploy NethServer 8 as a Linux-based application platform in the SML site.
+Final role:
+```text
+BAA-SML-NETH1 = SML site Linux application server
+```
+Purpose:
+```text
+- Host web-managed containerized applications
+- Provide internal business/corporate tools
+- Support future services such as documentation, collaboration, monitoring, and optional mail/groupware
+```
+Clarified concept:
+```text
+NethServer 8 is not mainly a firewall or domain controller.
+It is a web-managed self-hosted application platform.
+It uses Podman/containers underneath rather than being a plain Docker Compose platform.
+```
+---
+2. VM Placement
+We confirmed the VM belongs in the SML site, not the BIG site.
+Final placement:
+```text
+SML Site - 172.16.50.0/24
+
+BAA-SML-PFS1      Gateway / pfSense
+BAA-SML-DC1       AD DS / DNS
+BAA-STOR1         iSCSI storage
+BAA-SML-Nest1     Nested Hyper-V cluster node
+BAA-SML-NETH1     Rocky Linux 9 / NethServer 8
+```
+---
+3. VM Specification
+Final VM specification:
+```text
+VM name:        BAA-SML-NETH1
+OS:             Rocky Linux 9
+Install type:   Minimal / Server, no GUI
+Generation:     Generation 2
+Secure Boot:    Enabled
+Template:       Microsoft UEFI Certificate Authority
+CPU:            4 vCPU
+RAM:            8 GB static memory
+Disk:           80 GB dynamic VHDX
+Network:        SML internal/lab switch
+```
+Minimum workable specification discussed:
+```text
+CPU:            2 vCPU
+RAM:            4 GB
+Disk:           40 GB
+```
+Selected lab specification:
+```text
+CPU:            4 vCPU
+RAM:            8 GB
+Disk:           80 GB
+```
+---
+4. Secure Boot Setting
+For Rocky Linux 9 on Hyper-V, we selected:
+```text
+Secure Boot: Enabled
+Template: Microsoft UEFI Certificate Authority
+```
+Reason:
+```text
+Rocky Linux is not Windows.
+The default Windows Secure Boot template can block Linux boot.
+The Microsoft UEFI Certificate Authority template is the Linux-compatible Hyper-V option.
+```
+Fallback option:
+```text
+If Rocky fails to boot, disable Secure Boot.
+```
+---
+5. Hyper-V Integration Services
+Recommended settings:
+```text
+[x] Operating system shutdown
+[x] Time synchronization
+[x] Data Exchange
+[x] Heartbeat
+[x] Backup / Volume checkpoint
+[ ] Guest services
+```
+Reason:
+```text
+The enabled services allow clean shutdown, time sync, metadata exchange, heartbeat monitoring, and backup coordination.
+Guest services are optional and usually not needed because SSH/SCP is cleaner for Linux file transfer.
+```
+---
+6. Rocky Linux Installer Configuration
+During Rocky installation, we used the installer’s main summary screen and configured:
+```text
+Language:                 English
+Installation destination: 80 GB virtual disk
+Storage configuration:    Automatic
+Software selection:       Minimal Install / Server, no GUI
+Hostname:                 baa-sml-neth1.bojieanzac.com
+Time zone:                Australia / Brisbane
+Admin user:               bojie
+```
+---
+7. Static IPv4 Configuration
+Initial idea:
+```text
+172.16.50.120
+```
+This was changed because `.120` was inside or near the DHCP pool.
+Final static IP:
+```text
+Address:         172.16.50.60
+Netmask:         24
+Subnet mask:     255.255.255.0
+Gateway:         172.16.50.1
+DNS servers:     172.16.50.10,172.16.60.10
+Search domain:   bojieanzac.com
+```
+Meaning:
+```text
+172.16.50.60 = BAA-SML-NETH1
+172.16.50.1  = SML pfSense gateway
+172.16.50.10 = BAA-SML-DC1 / DNS
+172.16.60.10 = BAA-BIG-DC1 / DNS
+```
+We also ticked:
+```text
+[x] Require IPv4 addressing for this connection to complete
+```
+Reason:
+```text
+This server requires a working static IPv4 configuration.
+It should not be considered connected if IPv4 fails.
+```
+---
+8. IP Address Conflict Check
+We discussed how to check used IP addresses in the SML subnet.
+PowerShell ping scan:
+```powershell
+1..254 | ForEach-Object { Test-Connection -ComputerName "172.16.50.$_" -Count 1 -Quiet | Where-Object { $_ } | ForEach-Object { "172.16.50.$_ is responding" } }
+```
+This command pings every address from `172.16.50.1` to `172.16.50.254`.
+It helps identify IP addresses that respond to ICMP. It is useful for a quick scan, but it is not perfect because some machines may block ping.
+ARP check:
+```powershell
+arp -a
+```
+This command shows the local ARP table.
+It helps confirm which IP addresses your machine recently resolved to MAC addresses.
+Specific `.60` check:
+```powershell
+Test-Connection 172.16.50.60 -Count 4
+```
+This sends four pings to `172.16.50.60`.
+If it replies, the address is already in use or at least active. If it times out, it is probably free, but DHCP leases and documentation should still be checked.
+```powershell
+arp -a | findstr 172.16.50.60
+```
+This searches the ARP table for `172.16.50.60`.
+If it returns a MAC address, something may already be using that IP.
+---
+9. Rocky Installer Issue
+After configuring IPv4, the installer summary did not show the IP address immediately.
+Observed state:
+```text
+DNS was shown correctly.
+IP Address was blank.
+```
+Likely cause:
+```text
+The static IPv4 row may not have been fully applied, or the installer summary had not refreshed.
+```
+Fix used:
+```text
+Configure → IPv4 Settings
+Method: Manual
+Address: 172.16.50.60
+Netmask: 24
+Gateway: 172.16.50.1
+DNS: 172.16.50.10,172.16.60.10
+Search: bojieanzac.com
+Save
+Toggle Ethernet OFF → ON
+```
+Result:
+```text
+Rocky installation continued successfully.
+```
+---
+10. Hyper-V Dynamic Memory Issue
+During boot, Rocky showed messages like:
+```text
+hv_balloon: Balloon request will be partially fulfilled. Balloon floor reached.
+```
+We identified this as a Hyper-V Dynamic Memory / balloon driver message.
+Meaning:
+```text
+Hyper-V was trying to reclaim memory from the Rocky VM.
+Rocky reached the lower memory limit it was willing to give back.
+```
+Decision:
+```text
+Disable Dynamic Memory for BAA-SML-NETH1.
+Use static memory instead.
+```
+Final memory setting:
+```text
+Startup RAM: 8192 MB
+Dynamic Memory: Disabled
+```
+Reason:
+```text
+NethServer will run containers and services.
+Static memory is more predictable and cleaner for a server VM.
+```
+PowerShell verification command:
+```powershell
+Get-VMMemory -VMName "BAA-SML-NETH1"
+```
+This command shows the memory configuration for the VM.
+It helps verify whether Dynamic Memory is enabled or disabled and what startup memory is assigned.
+PowerShell configuration command:
+```powershell
+Set-VMMemory -VMName "BAA-SML-NETH1" -DynamicMemoryEnabled $false -StartupBytes 8GB
+```
+This command disables Dynamic Memory and sets the VM to use 8 GB of static RAM.
+It removes the memory ballooning behaviour and gives Rocky/NethServer predictable memory.
+---
+11. Rocky Post-Install Verification
+After Rocky installation completed, we planned and/or performed base checks.
+Memory check:
+```bash
+free -h
+```
+This shows how much memory Rocky can see.
+It verifies that the VM has stable RAM after disabling Dynamic Memory.
+Hostname check:
+```bash
+hostnamectl
+```
+This shows the system hostname and OS information.
+Expected hostname:
+```text
+baa-sml-neth1.bojieanzac.com
+```
+Hostname fix command:
+```bash
+sudo hostnamectl set-hostname baa-sml-neth1.bojieanzac.com
+```
+This sets the permanent hostname.
+It is required because NethServer should use a stable FQDN from the beginning.
+IP check:
+```bash
+ip addr
+```
+This shows network interfaces and assigned IP addresses.
+Expected address:
+```text
+172.16.50.60/24
+```
+Gateway check:
+```bash
+ip route
+```
+This shows the routing table.
+Expected default route:
+```text
+default via 172.16.50.1
+```
+DNS check:
+```bash
+cat /etc/resolv.conf
+```
+This shows the active DNS resolver configuration.
+Expected DNS configuration:
+```text
+nameserver 172.16.50.10
+nameserver 172.16.60.10
+search bojieanzac.com
+```
+---
+12. Network Tests
+Gateway test:
+```bash
+ping -c 4 172.16.50.1
+```
+This tests connectivity from Rocky to the SML pfSense gateway.
+Expected result: successful replies.
+SML DC test:
+```bash
+ping -c 4 172.16.50.10
+```
+This tests connectivity from Rocky to the local SML domain controller and DNS server.
+Expected result: successful replies.
+BIG DC test:
+```bash
+ping -c 4 172.16.60.10
+```
+This tests connectivity from the SML site to the BIG site domain controller.
+Expected result: successful replies if inter-site routing is working.
+Public IP test:
+```bash
+ping -c 4 8.8.8.8
+```
+This tests Internet connectivity by IP address.
+If this works but DNS names fail, the problem is DNS, not routing.
+---
+13. `nslookup` Issue
+`nslookup` did not work at first.
+Cause:
+```text
+Rocky Minimal does not always include nslookup by default.
+```
+Package needed:
+```text
+bind-utils
+```
+Check command:
+```bash
+which nslookup
+```
+This checks whether `nslookup` exists in the system path.
+If installed, it should return something like:
+```text
+/usr/bin/nslookup
+```
+Install command:
+```bash
+sudo dnf install -y bind-utils
+```
+This installs DNS troubleshooting tools, including `nslookup`, `dig`, and `host`.
+It is required for DNS testing on Rocky Minimal.
+DNS test command:
+```bash
+nslookup google.com
+```
+This tests external DNS resolution.
+Internal DNS test command:
+```bash
+nslookup baa-sml-dc1.bojieanzac.com
+```
+This tests AD DNS resolution for the SML domain controller.
+Expected result:
+```text
+baa-sml-dc1.bojieanzac.com -> 172.16.50.10
+```
+---
+14. Rocky Updates and Tools
+Update command:
+```bash
+sudo dnf update -y
+```
+This updates Rocky packages and security patches.
+It is required before installing NethServer so the base OS is clean and current.
+Reboot command:
+```bash
+sudo reboot
+```
+This restarts Rocky so updated packages, services, and any kernel updates are fully applied.
+Useful tools command:
+```bash
+sudo dnf install -y curl wget vim bash-completion net-tools bind-utils chrony
+```
+This installs common admin tools.
+`curl` is needed for downloading the NethServer installer. `wget` is another download tool. `vim` is a text editor. `bash-completion` improves shell usability. `net-tools` provides older network tools. `bind-utils` provides DNS tools. `chrony` provides time synchronisation.
+Enable Chrony:
+```bash
+sudo systemctl enable --now chronyd
+```
+This enables and starts the Chrony time service immediately.
+It is important because server logs, TLS certificates, authentication, and future AD integration all depend on correct time.
+Chrony check:
+```bash
+chronyc tracking
+```
+This shows whether Chrony is tracking a time source.
+It helps verify that Rocky’s time synchronisation is working.
+---
+15. NethServer 8 Installation
+After base Rocky checks were good, we installed NethServer 8.
+Switch to root:
+```bash
+sudo -i
+```
+This changes the shell to the root account.
+It is required because the NethServer installer modifies system packages, services, and container components.
+Install command:
+```bash
+curl https://raw.githubusercontent.com/NethServer/ns8-core/ns8-stable/core/install.sh | bash
+```
+This downloads the NethServer 8 installer script and runs it.
+Expected behaviour:
+```text
+Repository setup
+Package downloads
+NS8 core installation
+Service configuration
+Security updates
+Post-install instructions
+```
+Post-install reboot:
+```bash
+reboot
+```
+This restarts the server so NethServer services load cleanly.
+---
+16. NethServer Web Interface
+After reboot, we accessed:
+```text
+https://172.16.50.60/cluster-admin/
+```
+Default login discussed:
+```text
+Username: admin
+Password: Nethesis,1234
+```
+Security action:
+```text
+Change the default admin password immediately.
+```
+---
+17. Leader Node / Cluster Setup
+We selected the new node as the leader node.
+Final leader node settings:
+```text
+Create new cluster:       Yes
+Leader node:              BAA-SML-NETH1
+Leader FQDN:              baa-sml-neth1.bojieanzac.com
+Leader endpoint/address:  172.16.50.60
+Cluster VPN network:      10.250.0.0/24
+Cluster VPN port:         55820
+```
+Meaning:
+```text
+Leader node = first NS8 control/management node
+Worker node = future extra NS8 node that joins the leader
+```
+For this single-node lab:
+```text
+BAA-SML-NETH1 is both the leader and an application-running node.
+```
+---
+18. NS8 VPN CIDR Decision
+We chose:
+```text
+10.250.0.0/24
+```
+Reason:
+```text
+It does not overlap with existing lab networks.
+```
+Existing networks to avoid:
+```text
+172.16.50.0/24    SML site
+172.16.60.0/24    BIG site
+172.16.70.0/24    possible EDGE site
+10.8.0.0/24       OpenVPN
+100.64.0.0/10     Tailscale CGNAT range
+```
+We clarified pfSense behaviour:
+```text
+For a single-node NS8 setup, pfSense usually does not need to route 10.250.0.0/24.
+The server still uses 172.16.50.60 as its normal LAN address.
+The 10.250.0.0/24 range is mainly for NS8 internal cluster VPN/container management.
+```
+If future NS8 nodes are added across sites:
+```text
+pfSense must allow communication between the normal LAN IPs of the nodes.
+Example: 172.16.50.60 ↔ 172.16.60.x
+```
+---
+19. Dashboard Reached
+Final success point today:
+```text
+NethServer 8 dashboard is reachable.
+```
+Current checkpoint:
+```text
+BAA-SML-NETH1
+Rocky Linux 9
+NethServer 8 installed
+Dashboard reachable
+LAN IP: 172.16.50.60
+Site: SML
+DNS: 172.16.50.10, 172.16.60.10
+Cluster VPN CIDR: 10.250.0.0/24
+Role: NS8 leader node
+```
+---
+20. Recommended Next Steps
+Next session should start from:
+```text
+Open NethServer dashboard
+Confirm node health
+Change default admin password if not already done
+Check updates
+Open Software Center / Applications
+Install first simple test app
+```
+Recommended first app:
+```text
+DokuWiki
+```
+Reason:
+```text
+It is lighter and easier than mail or Nextcloud.
+It gives the lab a clear corporate documentation / internal knowledge base use case.
+```
+Recommended second app:
+```text
+Nextcloud
+```
+Reason:
+```text
+It demonstrates a realistic corporate collaboration and file-sharing platform.
+```
+Avoid doing mail first:
+```text
+Mail is possible, but it is more complex because of DNS, certificates, MX, SPF, DKIM, DMARC, reverse DNS, and port requirements.
+For the lab, mail should come after the basic platform is proven.
+```
+---
+Final State
+```text
+Status: Successful
+BAA-SML-NETH1 is built, NethServer 8 is installed, and the dashboard is accessible.
+```
