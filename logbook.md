@@ -336,3 +336,5 @@ The cluster foundation is working, and the local D:/L: disk layout is clean. How
 
 Next decision:
 Keep `BAA-CLUSTER1` as the failover cluster proof, and either build a separate server-to-server Storage Replica proof-of-concept or redesign the cluster storage layer using a supported clustered-storage architecture.
+
+# Update the DHCP dependency of both DCs.
