@@ -111,3 +111,16 @@ Next checks:
 4. Verify BAA-NEST-EXT-SW is External on both nested Hyper-V nodes.
 5. Verify MAC spoofing is enabled on BAA-BIG-Nest1 and BAA-SML-Nest1 from the physical Hyper-V hosts.
 ```
+
+## New TOPO
+Given how many layers you've now confirmed, a single diagram would be an unreadable tangle — so here's the comprehensive picture as four clean views: the physical metal, the logical lab, the cluster/storage layer, and the remote-access overlay that's the whole point of the project.
+
+First, the physical layer — the actual hardware and how it sits on your home network:That's the metal. Inside those two minis lives the actual `bojieanzac.com` environment — two virtual sites, each behind its own pfSense gateway:The trickiest part to picture is the clustering, because both clusters span the two sites and share storage across the IPsec link. Pulling them out on their own:And finally the reason for all of this — how `qlaptop` at TAFE reaches the lab, with the design decisions we landed on baked in:That's the whole system, top to bottom. A couple of things worth saying about it as a set rather than re-describing the pictures.
+
+The four views stack as layers of the same lab: the metal carries the virtual sites, the virtual sites host the two clusters, and Tailscale overlays the lot to give you access from TAFE. The amber boxes in the last view are the only pieces not yet built — everything below them already works.
+
+The two genuine action items are exactly what the last view flags: Tailscale is logged out on both minis right now (the APIPA tunnels), and the pfSense subnet routers aren't configured yet. Those two, plus approving the routes, are all that stands between you and reaching the lab from Coomera.
+
+These diagrams are also a clean addition to the `tafe-virtual-server-lab` repo — a `docs/topology.md` with the physical, logical, cluster, and remote-access views in one place would replace the older single-view topology file and match the reality we just nailed down. I can hand you that as Markdown (Mermaid versions of these) whenever you want.
+
+Where do you want to go next — write the BIG-side pfSense subnet-router steps now that both sites are healthy, get Tailscale logged back in on the minis first, or set the two host lab legs static so that's off the list? Any of the three is a sensible next move.
